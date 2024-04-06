@@ -3,7 +3,6 @@ let parse_exp_tests : (string * exp option) list = [
   ("", None)
 ]
 
-
 let rec exp_parser i = 
   let open Parser in
   (** Use [identifier] and [keyword] in your implementation,
@@ -174,16 +173,11 @@ let rec exp_parser i =
     
   in
   exp_parser_impl i
-  
+
 (** DO NOT Change This Definition *)
 let parse_exp : string -> exp option =
   let open Parser in
   run (between spaces eof exp_parser)
-    
-    
-
-
-
 
 (** Part 2: Type Inference *)
 let typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
@@ -205,17 +199,62 @@ let rec typ_infer (ctx : Context.t) (e : exp) : typ =
       else raise TypeInferenceError
 
   | ConstB _ -> Bool
-  | If (e', e1, e2) -> raise NotImplemented
+  | If (e', e1, e2) ->
+      if typ_infer ctx e' <> Bool
+      then raise TypeInferenceError
+      else
+      if typ_infer ctx e1 = typ_infer ctx e2
+      then typ_infer ctx e2
+      else raise TypeInferenceError
 
   | Comma (e1, e2) -> Pair (typ_infer ctx e1, typ_infer ctx e2)
-  | LetComma (x, y, e1, e2) -> raise NotImplemented
+  | LetComma (x, y, e1, e2) -> (*STILL NEEDS FIXING!!!*)
+      (*let tau1 = typ_infer ctx e1 in
+       let x_type = typ_infer ctx (Var x) in
+       let y_type = typ_infer ctx (Var y) in 
+       if tau1 <> Pair (x_type, y_type)
+       then raise TypeInferenceError
+       else
+         let ctx' = Context.extend (Context.extend ctx (x, x_type)) (y, y_type) in
+         let tau2 = typ_infer ctx' e2 in
+         if tau1 = tau2 then tau2
+         else raise TypeInferenceError *)
+      let tau1 = typ_infer ctx e1 in
+      let ctx' = Context.extend (Context.extend ctx (x, tau1)) (y, tau1) in
+      let inferred_type = typ_infer ctx' e2 in
+      if inferred_type = tau1 then
+        tau1
+      else
+        raise TypeInferenceError
 
-  | Fn (x, Some t, e') -> raise NotImplemented
-  | Apply (e1, e2) -> raise NotImplemented
+  | Fn (x, Some t, e') -> (match (x, Some t, e') with
+      | (x, Some t, e') -> Arrow (t, typ_infer (Context.extend ctx (x, t)) e')
+      | (x, None, e') ->
+          let t = TVar (ref None) in
+          Arrow (t, typ_infer (Context.extend ctx (x,t)) e')
+    )
+      
+  | Apply (e1, e2) ->
+      let tau1 = typ_infer ctx e1 in
+      let tau2 = typ_infer ctx e2 in
+      (match tau1 with
+       | Arrow (tau11, tau12) ->
+           if tau11 = tau2 then tau12
+           else raise TypeInferenceError
+       | _ -> raise TypeInferenceError)
 
-  | Rec (f, Some t, e') -> raise NotImplemented
+  | Rec (f, Some t, e') ->  (*typ_infer (Context.extend ctx (f, t)) e'*)
+      let ctx' = Context.extend ctx (f, t) in
+      let inferred_type = typ_infer ctx' e' in
+      if inferred_type = t then
+        t
+      else
+        raise TypeInferenceError
 
-  | Let (x, e1, e2) -> raise NotImplemented
+  | Let (x, e1, e2) ->
+      let tau1 = typ_infer ctx e1 in
+      let ctx' = Context.extend ctx (x, tau1) in
+      typ_infer ctx' e2
   | Var x ->
       begin
         match Context.lookup ctx x with
@@ -423,9 +462,13 @@ let rec unify : typ -> typ -> unit =
     match t with
     | Int -> false
     | Bool -> false
-    | Pair (t1, t2) -> raise NotImplemented
-    | Arrow (t1, t2) -> raise NotImplemented
-    | TVar y -> raise NotImplemented
+    | Pair (t1, t2) -> occurs_check x t1 || occurs_check x t2
+    | Arrow (t1, t2) -> occurs_check x t1 || occurs_check x t2
+    | TVar y when is_same_tvar x y -> raise OccursCheckFailure
+    | TVar y ->
+        (match !y with
+         | None -> false
+         | Some t' -> occurs_check x t')
   in
   fun ta tb ->
     let ta = rec_follow_tvar ta in
@@ -433,10 +476,10 @@ let rec unify : typ -> typ -> unit =
     match ta, tb with
     | Int, Int -> ()
     | Bool, Bool -> ()
-    | Pair (ta1, ta2), Pair (tb1, tb2) -> raise NotImplemented
-    | Arrow (ta1, ta2), Arrow (tb1, tb2) -> raise NotImplemented
+    | Pair (ta1, ta2), Pair (tb1, tb2) -> unify ta1 tb1; unify ta2 tb2
+    | Arrow (ta1, ta2), Arrow (tb1, tb2) -> unify ta1 tb1; unify ta2 tb2
     | TVar xa, TVar xb when is_same_tvar xa xb -> ()
-    | TVar xa, _ -> raise NotImplemented
+    | TVar xa, _ -> if occurs_check xa tb then raise OccursCheckFailure else xa := Some tb
     | _, TVar xb -> unify tb ta
     | _, _ -> raise UnificationFailure
 
@@ -459,25 +502,85 @@ let adv_typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
 
 let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
   match e with
-  | ConstI n -> raise NotImplemented
-  | PrimBop (e1, bop, e2) -> raise NotImplemented
-  | PrimUop (uop, e') -> raise NotImplemented
+  | ConstI n -> Int
+  | PrimBop (e1, bop, e2) ->
+      let t1 = adv_typ_infer ctx e1 in
+      let t2 = adv_typ_infer ctx e2 in
+      unify t1 Int;
+      unify t2 Int;
+      (match bop with
+       | Equals | LessThan -> Bool
+       | Plus | Minus | Times -> Int)
+  | PrimUop (uop, e') ->
+      let t = adv_typ_infer ctx e' in
+      unify t Int;
+      let Negate = uop in Int
 
-  | ConstB b -> raise NotImplemented
-  | If (e', e1, e2) -> raise NotImplemented
+  | ConstB b -> Bool
+  | If (e', e1, e2) ->
+      let t1 = adv_typ_infer ctx e' in
+      unify t1 Bool;
+      let t2 = adv_typ_infer ctx e1 in
+      let t3 = adv_typ_infer ctx e2 in
+      unify t2 t3;
+      t2
 
-  | Comma (e1, e2) -> raise NotImplemented
-  | LetComma (x, y, e1, e2) -> raise NotImplemented
+  | Comma (e1, e2) ->
+      let t1 = adv_typ_infer ctx e1 in
+      let t2 = adv_typ_infer ctx e2 in
+      Pair (t1, t2)
+  | LetComma (x, y, e1, e2) ->
+      let t1 = adv_typ_infer ctx e1 in
+      let ctx' = Context.extend (Context.extend ctx (x, t1)) (y, t1) in
+      adv_typ_infer ctx' e2
 
-  | Fn (x, Some t, e') -> raise NotImplemented
-  | Fn (x, None, e') -> raise IgnoredInPart2
-  | Apply (e1, e2) -> raise NotImplemented
+  | Fn (x, Some t, e') ->
+      let ctx' = Context.extend ctx (x, t) in
+      let t' = adv_typ_infer ctx' e' in
+      Arrow (t, t')
+  | Fn (x, None, e') ->
+      let a = new_tvar () in
+      let ctx' = Context.extend ctx (x, TVar a) in
+      let t' = adv_typ_infer ctx' e' in
+      (match !a with
+       | Some t -> Arrow (TVar a, t')
+       | None -> raise TypeInferenceError)
+  | Apply (e1, e2) ->
+      let a = new_tvar () in
+      let t1 = adv_typ_infer ctx e1 in
+      let t2 = adv_typ_infer ctx e2 in
+      (match !a with
+       | Some ta ->
+           let tb = TVar a in
+           unify t1 (Arrow (t2, tb));
+           tb
+       | None -> raise TypeInferenceError)
 
-  | Rec (f, Some t, e') -> raise NotImplemented
-  | Rec (f, None, e') -> raise IgnoredInPart2
+  | Rec (f, Some t, e') ->
+      let ctx' = Context.extend ctx (f, Arrow (t, t)) in
+      let t' = adv_typ_infer ctx' e' in
+      unify t' t;
+      reset_print_typ ();
+      t
+  | Rec (f, None, e') ->
+      let a = new_tvar () in
+      let b = new_tvar () in
+      let ctx' = Context.extend ctx (f, Arrow (TVar a, TVar b)) in
+      let t' = adv_typ_infer ctx' e' in
+      (match !a, !b with
+       | Some ta, Some tb -> unify (Arrow (ta, tb)) t'; reset_print_typ (); Arrow (ta, tb)
+       | _, _ -> raise TypeInferenceError)
 
-  | Let (x, e1, e2) -> raise NotImplemented
-  | Var x -> raise NotImplemented
+  | Let (x, e1, e2) ->
+      let t1 = adv_typ_infer ctx e1 in
+      let ctx' = Context.extend ctx (x, t1) in
+      let t2 = adv_typ_infer ctx' e2 in
+      reset_print_typ ();
+      t2
+  | Var x ->
+      (match Context.lookup ctx x with
+       | Some t -> t
+       | None -> raise TypeInferenceError)
 
 (** DO NOT Change This Definition *)
 let adv_typ_infer_test_helper ctx e =
@@ -490,16 +593,16 @@ let adv_typ_infer_test_helper ctx e =
 
 (**
  ************************************************************
-You Don't Need to Modify Anything After This Line
-                  ************************************************************
+ You Don't Need to Modify Anything After This Line
+ ************************************************************
 
-                  Following definitions are the helper entrypoints
-                    so that you can do some experiments in the top-level.
-                                                                     Once you implement [exp_parser], [typ_infer], and [eval],
-                                                                                                                       you can test them with [infer_main] in the top-level.
-                                                                                                                                                                        Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
-                                                                                                                                                                                                                                        you can test them with [adv_infer_main] in the top-level.
-                                                                                                                                                                                                                                                                                             *)
+ Following definitions are the helper entrypoints
+ so that you can do some experiments in the top-level.
+ Once you implement [exp_parser], [typ_infer], and [eval],
+ you can test them with [infer_main] in the top-level.
+ Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
+ you can test them with [adv_infer_main] in the top-level.
+ *)
 let infer_main exp_str =
   match parse_exp exp_str with
   | None -> raise ParserFailure
