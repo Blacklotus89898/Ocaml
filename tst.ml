@@ -208,24 +208,13 @@ let rec typ_infer (ctx : Context.t) (e : exp) : typ =
       else raise TypeInferenceError
 
   | Comma (e1, e2) -> Pair (typ_infer ctx e1, typ_infer ctx e2)
-  | LetComma (x, y, e1, e2) -> (*STILL NEEDS FIXING!!!*)
-      (*let tau1 = typ_infer ctx e1 in
-       let x_type = typ_infer ctx (Var x) in
-       let y_type = typ_infer ctx (Var y) in 
-       if tau1 <> Pair (x_type, y_type)
-       then raise TypeInferenceError
-       else
-         let ctx' = Context.extend (Context.extend ctx (x, x_type)) (y, y_type) in
-         let tau2 = typ_infer ctx' e2 in
-         if tau1 = tau2 then tau2
-         else raise TypeInferenceError *)
-      let tau1 = typ_infer ctx e1 in
-      let ctx' = Context.extend (Context.extend ctx (x, tau1)) (y, tau1) in
-      let inferred_type = typ_infer ctx' e2 in
-      if inferred_type = tau1 then
-        tau1
-      else
-        raise TypeInferenceError
+                        
+  | LetComma (x, y, e1, e2) -> 
+      let Pair (tx, ty) = typ_infer ctx e1 in 
+      let ctx' = Context.extend ctx (x, tx) in
+      let ctx'' = Context.extend ctx' (y, ty) in 
+      typ_infer ctx'' e2
+        
 
   | Fn (x, Some t, e') -> (match (x, Some t, e') with
       | (x, Some t, e') -> Arrow (t, typ_infer (Context.extend ctx (x, t)) e')
