@@ -425,6 +425,7 @@ let eval_test_helper e =
   with
   | EvaluationStuck -> None
 
+
 (** Part 4: Unification & Advanced Type Inference *)
 let unify_test_case1 () =
   let x = new_tvar () in
@@ -451,11 +452,8 @@ let rec unify : typ -> typ -> unit =
     | Bool -> false
     | Pair (t1, t2) -> occurs_check x t1 || occurs_check x t2
     | Arrow (t1, t2) -> occurs_check x t1 || occurs_check x t2
-    | TVar y when is_same_tvar x y -> raise OccursCheckFailure
-    | TVar y ->
-        (match !y with
-         | None -> false
-         | Some t' -> occurs_check x t')
+    | TVar y -> is_same_tvar x y
+                
   in
   fun ta tb ->
     let ta = rec_follow_tvar ta in
@@ -463,12 +461,23 @@ let rec unify : typ -> typ -> unit =
     match ta, tb with
     | Int, Int -> ()
     | Bool, Bool -> ()
-    | Pair (ta1, ta2), Pair (tb1, tb2) -> unify ta1 tb1; unify ta2 tb2
-    | Arrow (ta1, ta2), Arrow (tb1, tb2) -> unify ta1 tb1; unify ta2 tb2
+    | Pair (ta1, ta2), Pair (tb1, tb2) -> 
+        unify ta1 tb1;
+        unify ta2 tb2
+    | Arrow (ta1, ta2), Arrow (tb1, tb2) -> 
+        unify ta1 tb1;
+        unify ta2 tb2
     | TVar xa, TVar xb when is_same_tvar xa xb -> ()
-    | TVar xa, _ -> if occurs_check xa tb then raise OccursCheckFailure else xa := Some tb
+    | TVar xa, _ -> 
+        if occurs_check xa tb then
+          raise OccursCheckFailure  
+        else
+          xa := Some tb
     | _, TVar xb -> unify tb ta
-    | _, _ -> raise UnificationFailure
+    | _, _ -> raise UnificationFailure 
+  
+
+(* Part 4.2 Below *)
 
 (** DO NOT Change This Definition *)
 let unify_test_helper f =
@@ -490,33 +499,32 @@ let adv_typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
 let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
   match e with
   | ConstI n -> Int
-  | PrimBop (e1, bop, e2) ->
-      let t1 = adv_typ_infer ctx e1 in
-      let t2 = adv_typ_infer ctx e2 in
-      unify t1 Int;
-      unify t2 Int;
-      (match bop with
-       | Equals | LessThan -> Bool
-       | Plus | Minus | Times -> Int)
-  | PrimUop (uop, e') ->
-      let t = adv_typ_infer ctx e' in
-      unify t Int;
-      let Negate = uop in Int
-
-  | ConstB b -> Bool
-  | If (e', e1, e2) ->
-      let t1 = adv_typ_infer ctx e' in
-      unify t1 Bool;
-      let t2 = adv_typ_infer ctx e1 in
-      let t3 = adv_typ_infer ctx e2 in
-      unify t2 t3;
+    
+  | PrimBop (e1, bop, e2) -> 
+      let ((t1, t2), t3) = bop_type bop in
+      unify (adv_typ_infer ctx e1) t1;
+      unify (adv_typ_infer ctx e2) t2;
+      t3
+      
+  | PrimUop (uop, e') -> 
+      let (t1, t2) = uop_type uop in
+      unify (adv_typ_infer ctx e') t1;
       t2
 
-  | Comma (e1, e2) ->
+  | ConstB b -> Bool
+    
+  | If (e', e1, e2) -> 
+      let t = adv_typ_infer ctx e' in
+      unify t Bool;
       let t1 = adv_typ_infer ctx e1 in
       let t2 = adv_typ_infer ctx e2 in
-      Pair (t1, t2)
-  | LetComma (x, y, e1, e2) ->
+      unify t1 t2;
+      t1
+
+  | Comma (e1, e2) -> 
+      Pair (adv_typ_infer ctx e1, adv_typ_infer ctx e2)
+        
+  | LetComma (x, y, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
       let tx, ty = match t1 with
         | Pair (tx, ty) -> (tx, ty)
@@ -581,16 +589,16 @@ let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
        | None -> raise TypeInferenceError)
 
 
-  | Let (x, e1, e2) ->
+  | Let (x, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
-      let ctx' = Context.extend ctx (x, t1) in
-      let t2 = adv_typ_infer ctx' e2 in
-      reset_print_typ ();
-      t2
-  | Var x ->
-      (match Context.lookup ctx x with
-       | Some t -> t
-       | None -> raise TypeInferenceError)
+      let ctx_extended = Context.extend ctx (x, t1) in
+      adv_typ_infer ctx_extended e2
+        
+  | Var x -> 
+      match Context.lookup ctx x with
+      | Some (TVar {contents = Some t}) -> t
+      | Some t -> t
+      | None -> raise TypeInferenceError
 
 (** DO NOT Change This Definition *)
 let adv_typ_infer_test_helper ctx e =
@@ -603,16 +611,16 @@ let adv_typ_infer_test_helper ctx e =
 
 (**
  ************************************************************
- You Don't Need to Modify Anything After This Line
- ************************************************************
+You Don't Need to Modify Anything After This Line
+                  ************************************************************
 
- Following definitions are the helper entrypoints
- so that you can do some experiments in the top-level.
- Once you implement [exp_parser], [typ_infer], and [eval],
- you can test them with [infer_main] in the top-level.
- Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
- you can test them with [adv_infer_main] in the top-level.
- *)
+                  Following definitions are the helper entrypoints
+                    so that you can do some experiments in the top-level.
+                                                                     Once you implement [exp_parser], [typ_infer], and [eval],
+                                                                                                                       you can test them with [infer_main] in the top-level.
+                                                                                                                                                                        Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
+                                                                                                                                                                                                                                        you can test them with [adv_infer_main] in the top-level.
+                                                                                                                                                                                                                                                                                             *)
 let infer_main exp_str =
   match parse_exp exp_str with
   | None -> raise ParserFailure
