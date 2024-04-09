@@ -208,11 +208,13 @@ let rec typ_infer (ctx : Context.t) (e : exp) : typ =
       else raise TypeInferenceError
 
   | Comma (e1, e2) -> Pair (typ_infer ctx e1, typ_infer ctx e2)
+                        
   | LetComma (x, y, e1, e2) -> 
       let Pair (tx, ty) = typ_infer ctx e1 in 
       let ctx' = Context.extend ctx (x, tx) in
       let ctx'' = Context.extend ctx' (y, ty) in 
       typ_infer ctx'' e2
+        
 
   | Fn (x, Some t, e') -> (match (x, Some t, e') with
       | (x, Some t, e') -> Arrow (t, typ_infer (Context.extend ctx (x, t)) e')
@@ -526,68 +528,42 @@ let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
         
   | LetComma (x, y, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
-      let tx, ty = match t1 with
-        | Pair (tx, ty) -> (tx, ty)
-        | _ -> raise TypeInferenceError in 
-      let ctx' = Context.extend ctx (x, tx) in
-      let ctx'' = Context.extend ctx' (y, ty) in
-      adv_typ_infer ctx'' e2
+      (match t1 with
+       | Pair (tx, ty) ->
+           let ctx_extended = 
+             Context.extend (Context.extend ctx (x, tx)) (y, ty) in
+           adv_typ_infer ctx_extended e2
+       | _ -> raise TypeInferenceError)
 
-  | Fn (x, Some t, e') ->
-      let ctx' = Context.extend ctx (x, t) in
-      let t' = adv_typ_infer ctx' e' in
-      Arrow (t, t')
-  | Fn (x, None, e') ->
-      let a = new_tvar () in
-      let ctx' = Context.extend ctx (x, TVar a) in
-      let t' = adv_typ_infer ctx' e' in
-      (match !a with
-       | Some t -> Arrow (TVar a, t')
-       | None -> raise TypeInferenceError)
-  | Apply (e1, e2) ->
-      (*let a = new_tvar () in
-       let t1 = adv_typ_infer ctx e1 in
-       let t2 = adv_typ_infer ctx e2 in
-       (match !a with
-        | Some ta ->
-            let tb = TVar a in
-            unify t1 (Arrow (t2, tb));
-            reset_print_typ ();
-            tb
-        | None -> raise TypeInferenceError)*)
+  | Fn (x, Some t, e') -> 
+      let ctx_extended = Context.extend ctx (x, t) in
+      Arrow (t, adv_typ_infer ctx_extended e')
+        
+  | Fn (x, None, e') -> 
+      let x_type = new_tvar () in
+      let ctx_extended = Context.extend ctx (x, TVar x_type) in
+      let body_type = adv_typ_infer ctx_extended e' in
+      Arrow (TVar x_type, body_type)
+                          
+  | Apply (e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
       let t2 = adv_typ_infer ctx e2 in
-      let t_result = new_tvar () in
-      unify t1 (Arrow (t2, TVar t_result));
-      rec_follow_tvar (TVar t_result)
-
-  | Rec (f, Some t, e') ->
-      let ctx' = Context.extend ctx (f, Arrow (t, t)) in
-      let t' = adv_typ_infer ctx' e' in
-      unify t' t;
-      reset_print_typ ();
+      let t3 = new_tvar () in
+      unify t1 (Arrow (t2, TVar t3));
+      TVar t3
+        
+  | Rec (f, Some t, e') -> 
+      let ctx_extended = Context.extend ctx (f, t) in
+      unify t (adv_typ_infer ctx_extended e');
       t
-  | Rec (f, None, e') ->
-      (*let a = new_tvar () in
-       let b = new_tvar () in
-       let ctx' = Context.extend ctx (f, Arrow (TVar a, TVar b)) in
-       let t' = adv_typ_infer ctx' e' in
-       (match !a, !b with
-        | Some ta, Some tb ->
-            unify (Arrow (ta, tb)) t';
-            reset_print_typ ();
-            Arrow (ta, tb)
-        | _, _ -> raise TypeInferenceError)*)
-      let a = new_tvar () in
-      let ctx' = Context.extend ctx (f, Arrow (TVar a, TVar a)) in
-      let t' = adv_typ_infer ctx' e' in
-      (match !a with
-       | Some ta ->
-           unify (Arrow (TVar a, ta)) t';
-           reset_print_typ ();
-           Arrow (TVar a, ta)
-       | None -> raise TypeInferenceError)
 
+      
+  | Rec (f, None, e') -> 
+      let f_type_var = new_tvar () in
+      let ctx_extended = Context.extend ctx (f, TVar f_type_var) in
+      let inferred_body_type = adv_typ_infer ctx_extended e' in
+      unify (TVar f_type_var) inferred_body_type;
+      TVar f_type_var
 
   | Let (x, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
