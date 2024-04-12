@@ -22,8 +22,8 @@ let rec exp_parser i =
 
   let applicative_exp_parser : exp Parser.t = 
     atomic_exp_parser |*> fun first_exp ->
-      many atomic_exp_parser |> map (fun exprs ->
-          List.fold_left (fun acc e -> Apply(acc, e)) first_exp exprs)
+      many atomic_exp_parser |> map (
+        List.fold_left (fun acc e -> Apply(acc, e)) first_exp)
   in 
 
   let let_binding_parser : exp Parser.t =
@@ -137,7 +137,6 @@ let rec exp_parser i =
 let parse_exp : string -> exp option =
   let open Parser in
   run (between spaces eof exp_parser)
-
 (** Part 2: Type Inference *)
 let typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
   ((Context.empty, ConstB true), Some Bool)
@@ -146,62 +145,57 @@ let typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
 let rec typ_infer (ctx : Context.t) (e : exp) : typ =
   match e with
   | ConstI _ -> Int
-  | PrimBop (e1, bop, e2) ->
-      let ((t1, t2), t3) = bop_type bop in
-      if typ_infer ctx e1 = t1 && typ_infer ctx e2 = t2
-      then t3
-      else raise TypeInferenceError
-  | PrimUop (uop, e') ->
-      let (t1, t2) = uop_type uop in
-      if typ_infer ctx e' = t1
-      then t2
-      else raise TypeInferenceError
 
   | ConstB _ -> Bool
+  
+  | PrimBop (e1, bop, e2) ->
+      let ((t1, t2), t3) = bop_type bop in
+      if typ_infer ctx e1 = t1 && typ_infer ctx e2 = t2 then t3
+      else raise TypeInferenceError
+  
+      | PrimUop (uop, e') ->
+
+      let (t1, t2) = uop_type uop in
+      if typ_infer ctx e' = t1 then t2
+      else raise TypeInferenceError
+
   | If (e', e1, e2) ->
-      if typ_infer ctx e' <> Bool
-      then raise TypeInferenceError
+      if typ_infer ctx e' <> Bool then raise TypeInferenceError
       else 
         let t1 = typ_infer ctx e1 in
-        if t1  = typ_infer ctx e2
-        then t1
+        if t1 = typ_infer ctx e2 then t1
         else raise TypeInferenceError
 
   | Comma (e1, e2) -> Pair (typ_infer ctx e1, typ_infer ctx e2)
-                        
+
   | LetComma (x, y, e1, e2) -> 
       let Pair (tx, ty) = typ_infer ctx e1 in 
-      let ctx' = Context.extend ctx (x, tx) in
-      let ctx'' = Context.extend ctx' (y, ty) in 
+      (* let ctx' = Context.extend ctx (x, tx) in *)
+      let ctx'' = Context.extend (Context.extend ctx (x, tx)) (y, ty) in 
       typ_infer ctx'' e2
-        
 
-  | Fn (x, Some t, e') -> (match (x, Some t, e') with
-      | (x, Some t, e') -> Arrow (t, typ_infer (Context.extend ctx (x, t)) e')
-      | (x, None, e') -> let t = TVar (ref None) in
-          Arrow (t, typ_infer (Context.extend ctx (x,t)) e')
-    )
-      
+  | Fn (x, Some t, e') -> 
+      let arrow_type = Arrow (t, typ_infer (Context.extend ctx (x, t)) e') in
+      arrow_type
+
   | Apply (e1, e2) ->
       let t1 = typ_infer ctx e1 in
       let t2 = typ_infer ctx e2 in
       (match t1 with
-       | Arrow (t1x, t1y) ->
-           if t1x = t2 then t1y
+       | Arrow (tx, ty) ->
+           if tx = t2 then ty
            else raise TypeInferenceError
        | _ -> raise TypeInferenceError)
 
   | Rec (f, Some t, e') ->  
       let ctx' = Context.extend ctx (f, t) in
       let inferred_type = typ_infer ctx' e' in
-      if inferred_type = t then
-        t
-      else
-        raise TypeInferenceError
+      if inferred_type = t then t
+      else raise TypeInferenceError
 
   | Let (x, e1, e2) ->
-      let tau1 = typ_infer ctx e1 in
-      let ctx' = Context.extend ctx (x, tau1) in
+      let t1 = typ_infer ctx e1 in
+      let ctx' = Context.extend ctx (x, t1) in
       typ_infer ctx' e2
 
   | Var x ->
@@ -210,7 +204,6 @@ let rec typ_infer (ctx : Context.t) (e : exp) : typ =
         | Some t -> t
         | None -> raise TypeInferenceError
       end
-
   (** You can ignore these cases for Part 2 *)
   | Fn (_, None, _) -> raise IgnoredInPart2
   | Rec (_, None, _) -> raise IgnoredInPart2
@@ -527,14 +520,14 @@ let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
 
   | Let (x, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
-let ctx_extended = Context.extend ctx (x, t1) in
-adv_typ_infer ctx_extended e2
+      let ctx_extended = Context.extend ctx (x, t1) in
+      adv_typ_infer ctx_extended e2
         
-| Var x -> 
-match Context.lookup ctx x with
-| Some (TVar {contents = Some t}) -> t
-| Some t -> t
-| None -> raise TypeInferenceError
+  | Var x -> 
+      match Context.lookup ctx x with
+      | Some (TVar {contents = Some t}) -> t
+      | Some t -> t
+      | None -> raise TypeInferenceError
 
 (** DO NOT Change This Definition *)
 let adv_typ_infer_test_helper ctx e =
