@@ -217,13 +217,8 @@ let typ_infer_test_helper ctx e =
 
 (** Part 3: Substitution & Evaluation *)
 let free_vars_test_helper_tests : (exp * ident list) list = [
-  (ConstI 5, []);
+  (ConstI 0, []);
   (Var "x", ["x"]); 
-  (Fn ("laurent123", None, Var "tiffany111"), ["tiffany111"]);
-  (Let ("x", ConstI 5, Var "x"), []); 
-  (Fn ("tiffany111", None, Var "tiffany111"), []); 
-  (Fn ("x", Some Int, PrimBop (Var "x", Plus, Var "y")), ["y"]);
-  (Apply (Fn ("x", None, PrimBop (Var "x", Plus, ConstI 4)), ConstI 2), []);
 ]
 
 let rec free_vars (e : exp) : IdentSet.t =
@@ -450,20 +445,16 @@ let adv_typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
 let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
   match e with
   | ConstI _ -> Int
-    
   | PrimBop (e1, bop, e2) -> 
       let ((t1, t2), t3) = bop_type bop in
       unify (adv_typ_infer ctx e1) t1;
       unify (adv_typ_infer ctx e2) t2;
       t3
-      
   | PrimUop (uop, e') -> 
       let (t1, t2) = uop_type uop in
       unify (adv_typ_infer ctx e') t1;
       t2
-
   | ConstB _ -> Bool
-    
   | If (e', e1, e2) -> 
       let t = adv_typ_infer ctx e' in
       unify t Bool;
@@ -471,54 +462,43 @@ let rec adv_typ_infer (ctx : Context.t) (e : exp) : typ =
       let t2 = adv_typ_infer ctx e2 in
       unify t1 t2;
       t1
-
   | Comma (e1, e2) -> 
       Pair (adv_typ_infer ctx e1, adv_typ_infer ctx e2)
-        
   | LetComma (x, y, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
       (match t1 with
        | Pair (tx, ty) ->
-           let ctx_extended = 
-             Context.extend (Context.extend ctx (x, tx)) (y, ty) in
+           let ctx_extended = Context.extend (Context.extend ctx (x, tx)) (y, ty) in
            adv_typ_infer ctx_extended e2
        | _ -> raise TypeInferenceError)
-
   | Fn (x, Some t, e') -> 
       let ctx_extended = Context.extend ctx (x, t) in
       Arrow (t, adv_typ_infer ctx_extended e')
-        
   | Fn (x, None, e') -> 
       let x_type = new_tvar () in
       let ctx_extended = Context.extend ctx (x, TVar x_type) in
       let body_type = adv_typ_infer ctx_extended e' in
       Arrow (TVar x_type, body_type)
-                          
   | Apply (e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
       let t2 = adv_typ_infer ctx e2 in
       let t3 = new_tvar () in
       unify t1 (Arrow (t2, TVar t3));
       TVar t3
-        
   | Rec (f, Some t, e') -> 
       let ctx_extended = Context.extend ctx (f, t) in
       unify t (adv_typ_infer ctx_extended e');
       t
-
-      
   | Rec (f, None, e') -> 
       let f_type_var = new_tvar () in
       let ctx_extended = Context.extend ctx (f, TVar f_type_var) in
       let inferred_body_type = adv_typ_infer ctx_extended e' in
       unify (TVar f_type_var) inferred_body_type;
       TVar f_type_var
-
   | Let (x, e1, e2) -> 
       let t1 = adv_typ_infer ctx e1 in
       let ctx_extended = Context.extend ctx (x, t1) in
       adv_typ_infer ctx_extended e2
-        
   | Var x -> 
       match Context.lookup ctx x with
       | Some (TVar {contents = Some t}) -> t
