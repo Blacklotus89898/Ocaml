@@ -5,93 +5,113 @@ let parse_exp_tests : (string * exp option) list = [
 
 let rec exp_parser i = 
   let open Parser in
+  (** Use [identifier] and [keyword] in your implementation,
+      not [identifier_except] and [keyword_among] directly *)
   let identifier, keyword =
     let keywords = ["true"; "false"; "let"; "in"; "end"; "if"; "then"; "else"; "fn"; "rec"] in
     identifier_except keywords, keyword_among keywords
   in 
+
   
   let atomic_exp_parser : exp Parser.t = 
     first_of [
       map (fun i -> ConstI i) int_digits;
       (keyword "true" |>> of_value (ConstB true));
       (keyword "false" |>> of_value (ConstB false));
-      map (fun x -> Var x) identifier;
+      map (fun id -> Var id) identifier;
       between (symbol "(") (symbol ")") exp_parser;
     ]
   in
 
   let applicative_exp_parser : exp Parser.t = 
     atomic_exp_parser |*> fun first_exp ->
-      many atomic_exp_parser |> map (
+      many atomic_exp_parser |> map ( 
         List.fold_left (fun acc e -> Apply(acc, e)) first_exp)
   in 
-
+  (* Assuming `failwith` is your way to signal error, and of_value can take unit *)
   let let_binding_parser : exp Parser.t =
     keyword "let" |>> first_of [
-      (between (symbol "(") (symbol ")") (sep_by_1 identifier (symbol ",")) |*> fun params ->
+    (* Attempt tuple destructuring let-binding parsing *)
+      (between (symbol "(") (symbol ")") (sep_by_1 identifier (symbol ",")) |*> fun ids ->
           symbol "=" |>> 
           exp_parser |*> fun exprs ->
             keyword "in" |>> exp_parser |*> fun body ->
-                symbol "end" |>> (match params with
-                    | [] | [_] -> fail
-                    | x :: y :: _ -> of_value (LetComma(x, y, exprs, body))
-                  ));
-      (identifier |*> fun var ->
+                symbol "end" |>> (
+                  match ids with
+                  | []  -> fail(* handle empty list case *)
+                  | [x] -> fail (* handle list with only one element *)
+                  | x :: y :: _ -> (* use x and y here *) of_value ( LetComma(x, y, exprs, body))
+                (* Adjust based on your library's failure signaling *)
+                )); 
+  (* Adjust based on your library's failure signaling *) 
+    (* Fallback to parsing simple let-bindings *)
+      (identifier |*> fun id ->
           symbol "=" |>> exp_parser |*> fun expr ->
               keyword "in" |>> exp_parser |*> fun body ->
-                  symbol "end" |>> of_value (Let(var, expr, body)))
+                  symbol "end" |>> of_value (Let(id, expr, body)))
     ]
+
+
+
   in
 
   let if_then_else_parser : exp Parser.t =
-    keyword "if" |>> exp_parser |*> fun b ->
-        keyword "then" |>> exp_parser |*> fun t ->
-            keyword "else" |>> exp_parser |*> fun f ->
-                of_value (If(b, t, f))
+    keyword "if" |>> exp_parser |*> fun cond ->
+        keyword "then" |>> exp_parser |*> fun e_then ->
+            keyword "else" |>> exp_parser |*> fun e_else ->
+                of_value (If(cond, e_then, e_else))
+
+
   in
 
   let rec_parser : exp Parser.t =
     keyword "rec" |>> identifier |*> fun f ->
         optional (symbol ":" |>> typ_parser) |*> fun tOpt ->
-          symbol "=>" |>> exp_parser |*> fun e ->
-              of_value (Rec(f, tOpt, e))
-  in
+          symbol "=>" |>> exp_parser |*> fun body ->
+              of_value (Rec(f, tOpt, body))
 
+  in
   let fn_parser : exp Parser.t =
     keyword "fn" |>> identifier |*> fun arg ->
         optional (symbol ":" |>> typ_parser) |*> fun tOpt ->
-          symbol "=>" |>> exp_parser |*> fun e ->
-              of_value (Fn(arg, tOpt, e))
+          symbol "=>" |>> exp_parser |*> fun body ->
+              of_value (Fn(arg, tOpt, body))
   in
+
 
   let negation_exp_parser : exp Parser.t =
-    optional (symbol "-") |*> fun n -> 
+    
+    optional (symbol "-") |*> fun negation -> 
       applicative_exp_parser |> map (fun e ->
-          match n with
-          | Some _ -> PrimUop (Negate, e)
-          | None -> e)
+          match negation with
+          | Some _ -> PrimUop (Negate, e)  (* Apply negation if the "-" symbol was present *)
+          | None -> e)  (* Return the expression unchanged if no "-" symbol was present *)
   in
-
-  let multiplicative_exp_parser x =
-    let multiplicative = 
+  let multiplicative_exp_parser i =
+    
+  (* Wrap the combinator call in a function for clear recursion *)
+    let multiplicative_impl = 
       left_assoc_op (symbol "*") negation_exp_parser (fun e1 _ e2 -> PrimBop (e1, Times, e2)) 
     in
-    multiplicative x
+    multiplicative_impl i
   in
   
-  let additive_exp_parser x =
+  let additive_exp_parser i =
+  (* Define how to parse operators "+" and "-". *)
     let operator_parser = 
       first_of [
         symbol "+" |>> of_value (fun e1 e2 -> PrimBop(e1, Plus, e2));
         symbol "-" |>> of_value (fun e1 e2 -> PrimBop(e1, Minus, e2));
       ]
     in
-    let additive =
+
+  (* Define the left associative operation parser using the operator parser. *)
+    let additive_impl =
       left_assoc_op operator_parser multiplicative_exp_parser (fun acc -> fun op_func -> op_func acc)
     in
-    additive x
-  in
+    additive_impl i
 
+  in
   let comparative_op_parser : (exp -> exp -> exp) Parser.t =
     first_of [
       symbol "=" |>> of_value (fun e1 e2 -> PrimBop(e1, Equals, e2));
@@ -100,36 +120,44 @@ let rec exp_parser i =
   in
 
   let comparative_exp_parser : exp Parser.t =
+    
     first_of [ 
       (non_assoc_op comparative_op_parser additive_exp_parser (fun e op -> op e));
     ]
   in
-
   let tuple_exp_parser : exp Parser.t = 
     between (symbol "(") (symbol ")") (
       map2 (fun e1 e2 -> Comma(e1, e2)) comparative_exp_parser (symbol "," |>> comparative_exp_parser)
     ) 
+
   in
   
-  let comma_pair_exp_parser =
-    map3 (fun e1 _ e2 -> Comma (e1, e2)) comparative_exp_parser (symbol ",") comparative_exp_parser
+  let comma_pair_expr =
+    map3 (fun e1 _ e2 -> Comma (e1, e2)) comparative_exp_parser (symbol ",") 
+      comparative_exp_parser
   in
   
-  let exp_parser_impl = 
+  
+  (** You may need to define helper parsers depending on [exp_parser] here *)
+  let exp_parser_impl =
     first_of [
       let_binding_parser;
       fn_parser;
       rec_parser;
-      comma_pair_exp_parser; 
-      tuple_exp_parser; 
-      if_then_else_parser; 
+      comma_pair_expr; 
+      tuple_exp_parser; (* This now comes after if-then-else *)
+      if_then_else_parser; (* Moved up for precedence *)
       comparative_exp_parser; 
       additive_exp_parser;  
       multiplicative_exp_parser;  
       negation_exp_parser; 
       atomic_exp_parser;
       applicative_exp_parser;
+      
+      
+      (* Function application might have the highest precedence *)
     ]
+    
   in
   exp_parser_impl i
 
@@ -137,6 +165,7 @@ let rec exp_parser i =
 let parse_exp : string -> exp option =
   let open Parser in
   run (between spaces eof exp_parser)
+
 (** Part 2: Type Inference *)
 let typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
   ((Context.empty, ConstB true), Some Bool)
@@ -145,65 +174,70 @@ let typ_infer_test_helper_tests : ((Context.t * exp) * typ option) list = [
 let rec typ_infer (ctx : Context.t) (e : exp) : typ =
   match e with
   | ConstI _ -> Int
-
-  | ConstB _ -> Bool
-  
   | PrimBop (e1, bop, e2) ->
       let ((t1, t2), t3) = bop_type bop in
-      if typ_infer ctx e1 = t1 && typ_infer ctx e2 = t2 then t3
+      if typ_infer ctx e1 = t1 && typ_infer ctx e2 = t2
+      then t3
       else raise TypeInferenceError
-  
   | PrimUop (uop, e') ->
-
       let (t1, t2) = uop_type uop in
-      if typ_infer ctx e' = t1 then t2
+      if typ_infer ctx e' = t1
+      then t2
       else raise TypeInferenceError
 
+  | ConstB _ -> Bool
   | If (e', e1, e2) ->
-      if typ_infer ctx e' <> Bool then raise TypeInferenceError
+      if typ_infer ctx e' <> Bool
+      then raise TypeInferenceError
       else 
         let t1 = typ_infer ctx e1 in
-        if t1 = typ_infer ctx e2 then t1
+        if t1  = typ_infer ctx e2
+        then t1
         else raise TypeInferenceError
 
   | Comma (e1, e2) -> Pair (typ_infer ctx e1, typ_infer ctx e2)
-
+                        
   | LetComma (x, y, e1, e2) -> 
       let Pair (tx, ty) = typ_infer ctx e1 in 
-      (* let ctx' = Context.extend ctx (x, tx) in *)
-      let ctx'' = Context.extend (Context.extend ctx (x, tx)) (y, ty) in 
+      let ctx' = Context.extend ctx (x, tx) in
+      let ctx'' = Context.extend ctx' (y, ty) in 
       typ_infer ctx'' e2
+        
 
-  | Fn (x, Some t, e') -> 
-      let arrow_type = Arrow (t, typ_infer (Context.extend ctx (x, t)) e') in
-      arrow_type
-
+  | Fn (x, Some t, e') -> (match (x, Some t, e') with
+      | (x, Some t, e') -> Arrow (t, typ_infer (Context.extend ctx (x, t)) e')
+      | (x, None, e') -> let t = TVar (ref None) in
+          Arrow (t, typ_infer (Context.extend ctx (x,t)) e')
+    )
+      
   | Apply (e1, e2) ->
       let t1 = typ_infer ctx e1 in
       let t2 = typ_infer ctx e2 in
       (match t1 with
-       | Arrow (tx, ty) ->
-           if tx = t2 then ty
+       | Arrow (t1x, t1y) ->
+           if t1x = t2 then t1y
            else raise TypeInferenceError
        | _ -> raise TypeInferenceError)
 
   | Rec (f, Some t, e') ->  
       let ctx' = Context.extend ctx (f, t) in
       let inferred_type = typ_infer ctx' e' in
-      if inferred_type = t then t
-      else raise TypeInferenceError
+      if inferred_type = t then
+        t
+      else
+        raise TypeInferenceError
 
   | Let (x, e1, e2) ->
-      let t1 = typ_infer ctx e1 in
-      let ctx' = Context.extend ctx (x, t1) in
+      let tau1 = typ_infer ctx e1 in
+      let ctx' = Context.extend ctx (x, tau1) in
       typ_infer ctx' e2
-
   | Var x ->
       begin
         match Context.lookup ctx x with
         | Some t -> t
         | None -> raise TypeInferenceError
       end
+
   (** You can ignore these cases for Part 2 *)
   | Fn (_, None, _) -> raise IgnoredInPart2
   | Rec (_, None, _) -> raise IgnoredInPart2
@@ -262,40 +296,41 @@ let rec subst ((d, z) : exp * ident) (e : exp) : exp =
     (x', subst (Var x', x) e)
   in
   match e with
-  | ConstI _ | ConstB _ -> e
-  | PrimBop (e1, bop, e2) ->
-      PrimBop (subst (d, z) e1, bop, subst (d, z) e2)
-  | PrimUop (uop, e1) ->
-      PrimUop (uop, subst (d, z) e1)
-  | If (e1, e2, e3) ->
-      If (subst (d, z) e1, subst (d, z) e2, subst (d, z) e3)
-  | Comma (e1, e2) ->
-      Comma (subst (d, z) e1, subst (d, z) e2)
-  | LetComma (x, y, e1, e2) ->
+  | ConstI _ -> e
+  | PrimBop (e1, bop, e2) -> PrimBop (subst (d, z) e1, bop, subst (d, z) e2)
+  | PrimUop (uop, e') -> PrimUop (uop, subst (d, z) e')
+
+  | ConstB _ -> e
+  | If (e', e1, e2) -> If (subst (d, z) e', subst (d, z) e1, subst (d, z) e2)
+
+  | Comma (e1, e2) -> Comma (subst (d, z) e1, subst (d, z) e2)
+  | LetComma (x, y, e1, e2) -> 
       let e1' = subst (d, z) e1 in
-      let e2', x', y' =
+      let e2', x', y' = 
         if x = z || IdentSet.mem x (free_vars d) || y = z || IdentSet.mem y (free_vars d) then
           let (x', e2') = if x = z || IdentSet.mem x (free_vars d) then rename (x, e2) else (x, e2) in
           let (y', e2'') = if y = z || IdentSet.mem y (free_vars d) then rename (y, e2') else (y, e2') in
           (e2'', x', y')
-        else (e2, x, y)
-      in
+        else (e2, x, y) in
       LetComma (x', y', e1', subst (d, z) e2')
-  | Fn (x, tOpt, e') ->
+
+  | Fn (x, tOpt, e') -> 
       if x = z then Fn (x, tOpt, e')
       else if IdentSet.mem x (free_vars d) then
         let (x', e'') = rename (x, e') in
         Fn (x', tOpt, subst (d, z) e'')
       else Fn (x, tOpt, subst (d, z) e')
-  | Apply (e1, e2) ->
-      Apply (subst (d, z) e1, subst (d, z) e2)
-  | Rec (x, tOpt, e') ->
-      if x = z then Rec (x, tOpt, e')
-      else if IdentSet.mem x (free_vars d) then
-        let (x', e'') = rename (x, e') in
-        Rec (x', tOpt, subst (d, z) e'')
-      else Rec (x, tOpt, subst (d, z) e')
-  | Let (x, e1, e2) ->
+          
+  | Apply (e1, e2) -> Apply (subst (d, z) e1, subst (d, z) e2)
+
+  | Rec (f, tOpt, e') -> 
+      if f = z then Rec (f, tOpt, e')
+      else if IdentSet.mem f (free_vars d) then
+        let (f', e'') = rename (f, e') in
+        Rec (f', tOpt, subst (d, z) e'')
+      else Rec (f, tOpt, subst (d, z) e')
+
+  | Let (x, e1, e2) -> 
       let e1' = subst (d, z) e1 in
       if x = z then Let (x, e1', e2)
       else if IdentSet.mem x (free_vars d) then
@@ -304,7 +339,8 @@ let rec subst ((d, z) : exp * ident) (e : exp) : exp =
       else Let (x, e1', subst (d, z) e2)
           
   | Var x ->
-      if x = z then d
+      if x = z
+      then d
       else e
 
 let eval_test_helper_tests : (exp * exp option) list = [
@@ -315,7 +351,7 @@ let eval_test_helper_tests : (exp * exp option) list = [
 
 let rec eval (e : exp) : exp =
   match e with
-  | ConstI _ | ConstB _ -> e
+  | ConstI _ -> e
   | PrimBop (e1, bop, e2) ->
       begin
         match eval e1, eval e2 with
@@ -330,41 +366,43 @@ let rec eval (e : exp) : exp =
             end
         | _ -> raise EvaluationStuck
       end
-  | PrimUop (uop, e1) ->
+  | PrimUop (_, e) ->
       begin
-        match eval e1 with
+        match eval e with
         | ConstI n -> ConstI (- n)
         | _ -> raise EvaluationStuck
       end
-  | If (e1, e2, e3) ->
-      begin
-        match eval e1 with
-        | ConstB true -> eval e2
-        | ConstB false -> eval e3
+
+  | ConstB _ -> e
+  | If (e', e1, e2) -> 
+      let cond = eval e' in
+      begin match cond with
+        | ConstB true -> eval e1
+        | ConstB false -> eval e2
         | _ -> raise EvaluationStuck
       end
-  | Comma (e1, e2) ->
-      let ev1, ev2 = eval e1, eval e2 in
-      Comma (ev1, ev2)
-  | LetComma (x, y, e1, e2) ->
+  
+  | Comma (e1, e2) -> Comma (eval e1, eval e2)
+  | LetComma (x, y, e1, e2) -> 
       let v1 = eval e1 in
-      begin
-        match v1 with
+      begin match v1 with
         | Comma (vx, vy) -> subst (vx, x) (subst (vy, y) e2) |> eval
         | _ -> raise EvaluationStuck
       end
+
   | Fn (x, _, e') -> Fn (x, None, e')
-  | Apply (e1, e2) ->
+                          
+  | Apply (e1, e2) -> 
       let fn = eval e1 in
       let arg = eval e2 in
-      begin
-        match fn with
+      begin match fn with
         | Fn (x, _, body) -> eval (subst (arg, x) body)
         | _ -> raise EvaluationStuck
       end
-  | Rec (x, _, e') ->
-      subst (Rec (x, None, e'), x) e' |> eval
-  | Let (x, e1, e2) ->
+
+  | Rec (f, _, e') -> subst (Rec (f, None, e'), f) e' |> eval
+
+  | Let (x, e1, e2) -> 
       let v1 = eval e1 in
       subst (v1, x) e2 |> eval
   | Var _ -> raise EvaluationStuck
@@ -537,15 +575,15 @@ let adv_typ_infer_test_helper ctx e =
 (**
  ************************************************************
 You Don't Need to Modify Anything After This Line
-************************************************************
+                  ************************************************************
 
-Following definitions are the helper entrypoints
-so that you can do some experiments in the top-level.
-Once you implement [exp_parser], [typ_infer], and [eval],
-you can test them with [infer_main] in the top-level.
-Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
-you can test them with [adv_infer_main] in the top-level.
-*)
+                  Following definitions are the helper entrypoints
+                    so that you can do some experiments in the top-level.
+                                                                     Once you implement [exp_parser], [typ_infer], and [eval],
+                                                                                                                       you can test them with [infer_main] in the top-level.
+                                                                                                                                                                        Likewise, once you implement [exp_parser], [adv_typ_infer], and [eval],
+                                                                                                                                                                                                                                        you can test them with [adv_infer_main] in the top-level.
+                                                                                                                                                                                                                                                                                             *)
 let infer_main exp_str =
   match parse_exp exp_str with
   | None -> raise ParserFailure
