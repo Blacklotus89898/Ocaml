@@ -5,123 +5,94 @@ let parse_exp_tests : (string * exp option) list = [
 
 let rec exp_parser i = 
   let open Parser in
-  (** Use [identifier] and [keyword] in your implementation,
-      not [identifier_except] and [keyword_among] directly *)
   let identifier, keyword =
     let keywords = ["true"; "false"; "let"; "in"; "end"; "if"; "then"; "else"; "fn"; "rec"] in
     identifier_except keywords, keyword_among keywords
   in 
-
   
   let atomic_exp_parser : exp Parser.t = 
     first_of [
       map (fun i -> ConstI i) int_digits;
       (keyword "true" |>> of_value (ConstB true));
       (keyword "false" |>> of_value (ConstB false));
-      map (fun id -> Var id) identifier;
+      map (fun x -> Var x) identifier;
       between (symbol "(") (symbol ")") exp_parser;
     ]
   in
 
   let applicative_exp_parser : exp Parser.t = 
     atomic_exp_parser |*> fun first_exp ->
-      many atomic_exp_parser |> map ( 
-        List.fold_left (fun acc e -> Apply(acc, e)) first_exp)
+      many atomic_exp_parser |> map (fun exprs ->
+          List.fold_left (fun acc e -> Apply(acc, e)) first_exp exprs)
   in 
-  (* Assuming `failwith` is your way to signal error, and of_value can take unit *)
+
   let let_binding_parser : exp Parser.t =
-    
     keyword "let" |>> first_of [
-    (* Attempt tuple destructuring let-binding parsing *)
-      (between (symbol "(") (symbol ")") (sep_by_1 identifier (symbol ",")) |*> fun ids ->
+      (between (symbol "(") (symbol ")") (sep_by_1 identifier (symbol ",")) |*> fun params ->
           symbol "=" |>> 
           exp_parser |*> fun exprs ->
             keyword "in" |>> exp_parser |*> fun body ->
-                symbol "end" |>> (
-                  match ids with
-                  | []  -> fail(* handle empty list case *)
-                  | [x] -> fail (* handle list with only one element *)
-                  | x :: y :: _ -> (* use x and y here *) of_value ( LetComma(x, y, exprs, body))
-                (* Adjust based on your library's failure signaling *)
-                )); 
-  (* Adjust based on your library's failure signaling *) 
-      
-    (* Fallback to parsing simple let-bindings *)
-      (identifier |*> fun id ->
+                symbol "end" |>> (match params with
+                    | [] | [_] -> fail
+                    | x :: y :: _ -> of_value (LetComma(x, y, exprs, body))
+                  ));
+      (identifier |*> fun var ->
           symbol "=" |>> exp_parser |*> fun expr ->
               keyword "in" |>> exp_parser |*> fun body ->
-                  symbol "end" |>> of_value (Let(id, expr, body)))
+                  symbol "end" |>> of_value (Let(var, expr, body)))
     ]
-
-
-
   in
 
   let if_then_else_parser : exp Parser.t =
-    
-    keyword "if" |>> exp_parser |*> fun cond ->
-        keyword "then" |>> exp_parser |*> fun e_then ->
-            keyword "else" |>> exp_parser |*> fun e_else ->
-                of_value (If(cond, e_then, e_else))
-
-
+    keyword "if" |>> exp_parser |*> fun b ->
+        keyword "then" |>> exp_parser |*> fun t ->
+            keyword "else" |>> exp_parser |*> fun f ->
+                of_value (If(b, t, f))
   in
 
   let rec_parser : exp Parser.t =
-    
     keyword "rec" |>> identifier |*> fun f ->
         optional (symbol ":" |>> typ_parser) |*> fun tOpt ->
-          symbol "=>" |>> exp_parser |*> fun body ->
-              of_value (Rec(f, tOpt, body))
-
+          symbol "=>" |>> exp_parser |*> fun e ->
+              of_value (Rec(f, tOpt, e))
   in
+
   let fn_parser : exp Parser.t =
-    
     keyword "fn" |>> identifier |*> fun arg ->
         optional (symbol ":" |>> typ_parser) |*> fun tOpt ->
-          symbol "=>" |>> exp_parser |*> fun body ->
-              of_value (Fn(arg, tOpt, body))
+          symbol "=>" |>> exp_parser |*> fun e ->
+              of_value (Fn(arg, tOpt, e))
   in
-
 
   let negation_exp_parser : exp Parser.t =
-    
-    optional (symbol "-") |*> fun negation -> 
+    optional (symbol "-") |*> fun n -> 
       applicative_exp_parser |> map (fun e ->
-          match negation with
-          | Some _ -> PrimUop (Negate, e)  (* Apply negation if the "-" symbol was present *)
-          | None -> e)  (* Return the expression unchanged if no "-" symbol was present *)
+          match n with
+          | Some _ -> PrimUop (Negate, e)
+          | None -> e)
   in
-  let multiplicative_exp_parser i =
-    
-  (* Wrap the combinator call in a function for clear recursion *)
-    let multiplicative_impl = 
+
+  let multiplicative_exp_parser x =
+    let multiplicative = 
       left_assoc_op (symbol "*") negation_exp_parser (fun e1 _ e2 -> PrimBop (e1, Times, e2)) 
     in
-    multiplicative_impl i
+    multiplicative x
   in
   
-  let additive_exp_parser i =
-    
-
-  (* Define how to parse operators "+" and "-". *)
+  let additive_exp_parser x =
     let operator_parser = 
       first_of [
         symbol "+" |>> of_value (fun e1 e2 -> PrimBop(e1, Plus, e2));
         symbol "-" |>> of_value (fun e1 e2 -> PrimBop(e1, Minus, e2));
       ]
     in
-
-  (* Define the left associative operation parser using the operator parser. *)
-    let additive_impl =
+    let additive =
       left_assoc_op operator_parser multiplicative_exp_parser (fun acc -> fun op_func -> op_func acc)
     in
-
-    additive_impl i
-
+    additive x
   in
+
   let comparative_op_parser : (exp -> exp -> exp) Parser.t =
-    
     first_of [
       symbol "=" |>> of_value (fun e1 e2 -> PrimBop(e1, Equals, e2));
       symbol "<" |>> of_value (fun e1 e2 -> PrimBop(e1, LessThan, e2))
@@ -129,21 +100,19 @@ let rec exp_parser i =
   in
 
   let comparative_exp_parser : exp Parser.t =
-    
     first_of [ 
       (non_assoc_op comparative_op_parser additive_exp_parser (fun e op -> op e));
     ]
   in
+
   let tuple_exp_parser : exp Parser.t = 
     between (symbol "(") (symbol ")") (
       map2 (fun e1 e2 -> Comma(e1, e2)) comparative_exp_parser (symbol "," |>> comparative_exp_parser)
     ) 
-
   in
   
-  let comma_pair_expr =
-    map3 (fun e1 _ e2 -> Comma (e1, e2)) comparative_exp_parser (symbol ",") 
-      comparative_exp_parser
+  let comma_pair_exp_parser =
+    map3 (fun e1 _ e2 -> Comma (e1, e2)) comparative_exp_parser (symbol ",") comparative_exp_parser
   in
   
   let exp_parser_impl = 
@@ -151,7 +120,7 @@ let rec exp_parser i =
       let_binding_parser;
       fn_parser;
       rec_parser;
-      comma_pair_expr; 
+      comma_pair_exp_parser; 
       tuple_exp_parser; 
       if_then_else_parser; 
       comparative_exp_parser; 
@@ -160,9 +129,7 @@ let rec exp_parser i =
       negation_exp_parser; 
       atomic_exp_parser;
       applicative_exp_parser;
-      
     ]
-    
   in
   exp_parser_impl i
 
@@ -236,6 +203,7 @@ let rec typ_infer (ctx : Context.t) (e : exp) : typ =
       let tau1 = typ_infer ctx e1 in
       let ctx' = Context.extend ctx (x, tau1) in
       typ_infer ctx' e2
+
   | Var x ->
       begin
         match Context.lookup ctx x with
